@@ -32,7 +32,8 @@ libCcspPandM_middle_layer_src_la_CPPFLAGS = -I$(top_srcdir)/source/TR-181/includ
                                             -I$(top_srcdir)/custom/comcast \
                                             -I$(top_srcdir)/source-arm/TR-181/board_include \
                                             -I$(top_srcdir)/source-arm/TR-181/board_sbapi \
-                                            -I$(top_srcdir)/source-arm/TR-181/board_ml
+                                            -I$(top_srcdir)/source-arm/TR-181/board_ml \
+                                            -I${PKG_CONFIG_SYSROOT_DIR}$(includedir)
 
 libCcspPandM_middle_layer_src_la_SOURCES = \
     array_helpers.c \
@@ -107,7 +108,7 @@ libCcspPandM_middle_layer_src_la_SOURCES = \
     webui_webconfig_apis.c \
     webui_webconfig_dml.c \
     cosa_x_rdk_features_dml.c \
-    cosa_x_rdk_features_internal.c 
+    cosa_x_rdk_features_internal.c
 
 if FEATURE_HOTSPOT_SUPPORT
 libCcspPandM_middle_layer_src_la_SOURCES += \
@@ -150,4 +151,9 @@ libCcspPandM_middle_layer_src_la_LDFLAGS = -lccsp_common -lmsgpackc -lwebconfig_
 
 if CORE_NET_LIB_FEATURE_SUPPORT
 libCcspPandM_middle_layer_src_la_LDFLAGS += -lnet
+endif
+
+
+if CPU_FREQ_SUPPORT
+libCcspPandM_middle_layer_src_la_LDFLAGS += -L${PKG_CONFIG_SYSROOT_DIR}$(libdir) -lcpufreq
 endif

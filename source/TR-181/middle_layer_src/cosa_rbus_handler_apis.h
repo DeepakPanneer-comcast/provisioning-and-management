@@ -40,6 +40,7 @@
 #endif /*RBUS_WAN_IP*/
 
 #define WANMGR_CURRENT_STATUS_TR181	"Device.X_RDK_WanManager.CurrentStatus"
+#define WANMGR_WAN_STATE_EVENT	"Device.X_RDK_WanManager.WanState"
 
 #define  ARRAY_SZ(x) (sizeof(x) / sizeof((x)[0]))
 #if defined  (WAN_FAILOVER_SUPPORTED) || defined(RDKB_EXTENDER_ENABLED)
@@ -128,13 +129,32 @@ rbusError_t sendUpdateEvent(char* event_name , void* eventNewData, void* eventOl
 rbusError_t publishDevCtrlNetMode(uint32_t new_val, uint32_t old_val);
 
 /**
+ * @brief publish DevCtrlNetMode during PandM initialization
+ *
+ * @return status of operation
+ * @retval RBUS_ERROR_SUCCESS on success
+ * @retval RBUS error code on failure.
+ */
+
+int publishInitialDevCtrlVal();
+
+/**
+ * @brief Publishes DevCtrlNetMode during PandM initialization
+ *
+ * @return status of operation
+ * @retval 0 on success
+ * @retval -1 on failure.
+ */
+
+bool PAM_Rbus_SyseventInit();
+
+/**
  * @brief Initializes RBUS sysevent integration for PAM component.
  *
  * @return status of operation
  * @retval true on success
  * @retval false on failure.
  */
-bool PAM_Rbus_SyseventInit();
 
 #endif
 #if defined (WIFI_MANAGE_SUPPORTED)
@@ -460,4 +480,7 @@ rbusError_t eventWANIPSubHandler(rbusHandle_t handle, rbusEventSubAction_t actio
 rbusError_t eventWANIPv6SubHandler(rbusHandle_t handle, rbusEventSubAction_t action, const char *eventName, rbusFilter_t filter, int32_t interval, bool *autoPublish);
 
 #endif
+rbusError_t getWanStateHandler(rbusHandle_t handle, rbusProperty_t property, rbusGetHandlerOptions_t *opts);
+rbusError_t eventWanStateSubHandler(rbusHandle_t handle, rbusEventSubAction_t action, const char* eventName, rbusFilter_t filter, int32_t interval, bool* autoPublish);
+void publishWanStateEvent(const char *wanState);
 #endif

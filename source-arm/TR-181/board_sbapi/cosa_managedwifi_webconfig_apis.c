@@ -1073,6 +1073,7 @@ pErr createAmenitiesBridge(lanconfigTunnelInfo_t * pLanCfgTunnelInfo)
             CcspTraceError(("%s:%d, Hotspot is disabled\n",__FUNCTION__,__LINE__));
             snprintf(pErrRetVal->ErrorMsg, BUFF_LEN_128, "Hotspot is disabled\n");
             pErrRetVal->ErrorCode = HOTSPOT_DISABLED;
+            sCurrAmenityBridgeDetails.bIsAmenityEnabled = false;
             return pErrRetVal;
         }
 
@@ -1511,6 +1512,7 @@ BOOL unpackAndProcessManagedWifiData(char* pString)
             if (ld == NULL )
             {
                 CcspTraceInfo(("Corrupted lanconfig value\n"));
+                if (md) connectedbuilding_destroy(md); /* CID 346829 fix - Resource leak prevention */
                 return FALSE;
             }
 
@@ -1521,7 +1523,32 @@ BOOL unpackAndProcessManagedWifiData(char* pString)
             execData *execDataManagedWifi = NULL;
             policySequence *sequenceDetails = NULL;
             execDataManagedWifi = (execData*) malloc (sizeof(execData));
+            if (execDataManagedWifi == NULL) {
+                CcspTraceError(("%s:%d execDataManagedWifi malloc failed\n", __FUNCTION__, __LINE__));
+                /* CID 346829 fix - Resource leak prevention */
+                #if defined (AMENITIES_NETWORK_ENABLED)
+                if (ld) tunnelLanConfigDocdestroy(ld);
+                #else
+                if (ld) lanConfigDoc_destroy(ld);
+                #endif
+                if (wifi_encoded_data) free(wifi_encoded_data);
+                if (md) connectedbuilding_destroy(md);
+                return FALSE;
+            }
             sequenceDetails = (policySequence*) malloc (sizeof (policySequence) );
+            if (sequenceDetails == NULL) {
+                CcspTraceError(("%s:%d sequenceDetails malloc failed\n", __FUNCTION__, __LINE__));
+                /* CID 346829 fix - Resource leak prevention */
+                free(execDataManagedWifi);
+                #if defined (AMENITIES_NETWORK_ENABLED)
+                if (ld) tunnelLanConfigDocdestroy(ld);
+                #else
+                if (ld) lanConfigDoc_destroy(ld);
+                #endif
+                if (wifi_encoded_data) free(wifi_encoded_data);
+                if (md) connectedbuilding_destroy(md);
+                return FALSE;
+            }
             memset(sequenceDetails, 0, sizeof(policySequence));
             sequenceDetails->isExecInSequenceNeeded = 1 ;
             sequenceDetails->numOfComponents = 2 ;
@@ -1533,6 +1560,20 @@ BOOL unpackAndProcessManagedWifiData(char* pString)
             #endif
 
             sequenceDetails->multiCompExecData = (MultiComp_ExecInfo*) malloc (sequenceDetails->numOfComponents * sizeof(MultiComp_ExecInfo));
+            if (sequenceDetails->multiCompExecData == NULL) {
+                CcspTraceError(("%s:%d multiCompExecData malloc failed\n", __FUNCTION__, __LINE__));
+                /* CID 346829 fix - Resource leak prevention */
+                free(execDataManagedWifi);
+                free(sequenceDetails);
+                #if defined (AMENITIES_NETWORK_ENABLED)
+                if (ld) tunnelLanConfigDocdestroy(ld);
+                #else
+                if (ld) lanConfigDoc_destroy(ld);
+                #endif
+                if (wifi_encoded_data) free(wifi_encoded_data);
+                if (md) connectedbuilding_destroy(md);
+                return FALSE;
+            }
             memset(sequenceDetails->multiCompExecData, 0, sequenceDetails->numOfComponents * sizeof(MultiComp_ExecInfo));
 
             sequenceDetails->multiCompExecData->isMaster = 1 ;
@@ -1574,11 +1615,15 @@ BOOL unpackAndProcessManagedWifiData(char* pString)
                 execDataManagedWifi->multiCompRequest =1;
                 PushMultiCompBlobRequest(execDataManagedWifi);
                 CcspTraceInfo(("PushBlobRequest complete\n"));
+                /* CID 346830 fix - Resource leak prevention */
+                if (md) connectedbuilding_destroy(md);
                 return TRUE;
             }
             else
             {
                 CcspTraceWarning(("execData memory allocation failed\n"));
+                /* CID 346829 fix - Resource leak prevention */
+                free(sequenceDetails);
                 #if defined (AMENITIES_NETWORK_ENABLED)
                 tunnelLanConfigDocdestroy(ld);
                 #else
@@ -2208,7 +2253,7 @@ void processManageWifiData(backupLanconfig_t * pLanConfig, char cFlag, pErr pErr
                 pErrRetVal->ErrorCode = SYSEVENT_FAILURE;
                 if (0 == pthreadRetValue)
                 {
-                    CcspTraceInfo(("%s:%d, Timedout Cancelling the ManageWiFiThread\n",__FUNCTION__,__LINE__));
+                    CcspTraceInfo(("%s:%d, Error cleanup Cancelling the ManageWiFiThread\n",__FUNCTION__,__LINE__));
                     pthread_cancel(manageWifiBridgeThreadId);
                 }
                 return ;
@@ -3004,9 +3049,9 @@ int rollbackTunnelLanconfig(void)
         for (int iCount = 0; iCount < sBackupAmenityBridgeDetails.iBridgeCount; iCount++)
         {
             CcspTraceInfo(("%s:%d, Backup config Vlan=%d \n", __FUNCTION__, __LINE__, sBackupAmenityBridgeDetails.pBridgeInfoStruct[iCount].iVlanId));
-            CcspTraceInfo(("%s:%d, Current config Vlan=%d \n", __FUNCTION__, __LINE__, sCurrAmenityBridgeDetails.pBridgeInfoStruct[iCount].iVlanId));
             if (sBackupAmenityBridgeDetails.bIsAmenityEnabled && sCurrAmenityBridgeDetails.bIsAmenityEnabled)
             {
+                CcspTraceInfo(("%s:%d, Current config Vlan=%d \n", __FUNCTION__, __LINE__, sCurrAmenityBridgeDetails.pBridgeInfoStruct[iCount].iVlanId));
                 //Check for VlanId change
                 if (sCurrAmenityBridgeDetails.pBridgeInfoStruct[iCount].iVlanId != sBackupAmenityBridgeDetails.pBridgeInfoStruct[iCount].iVlanId)
                 {
@@ -3192,12 +3237,18 @@ void updateBackupConfig(void)
 
     sBackupLanConfig.bMwEnable = sCurrentLanConfig.bMwEnable;
     strncpy (sBackupLanConfig.aAlias, sCurrentLanConfig.aAlias, (sizeof(sBackupLanConfig.aAlias)-1));
+    sBackupLanConfig.aAlias[sizeof(sBackupLanConfig.aAlias) - 1] = '\0';  /* CID 379208 fix - String not null terminated */
     sBackupLanConfig.bDhcpServerEnable = sCurrentLanConfig.bDhcpServerEnable;
     strncpy (sBackupLanConfig.aLanIpAddr,sCurrentLanConfig.aLanIpAddr, (sizeof(sBackupLanConfig.aLanIpAddr)-1));
+    sBackupLanConfig.aLanIpAddr[sizeof(sBackupLanConfig.aLanIpAddr) - 1] = '\0';  /* CID 379208 fix - String not null terminated */
     strncpy (sBackupLanConfig.aLanSubnetMask,sCurrentLanConfig.aLanSubnetMask, (sizeof(sBackupLanConfig.aLanSubnetMask)-1));
+    sBackupLanConfig.aLanSubnetMask[sizeof(sBackupLanConfig.aLanSubnetMask) - 1] = '\0';  /* CID 379208 fix - String not null terminated */
     strncpy (sBackupLanConfig.aDhcpStartIpAdd,sCurrentLanConfig.aDhcpStartIpAdd, (sizeof(sBackupLanConfig.aDhcpStartIpAdd)-1));
+    sBackupLanConfig.aDhcpStartIpAdd[sizeof(sBackupLanConfig.aDhcpStartIpAdd) - 1] = '\0';  /* CID 379208 fix - String not null terminated */
     strncpy (sBackupLanConfig.aDhcpEndIpAdd,sCurrentLanConfig.aDhcpEndIpAdd, (sizeof(sBackupLanConfig.aDhcpEndIpAdd)-1));
+    sBackupLanConfig.aDhcpEndIpAdd[sizeof(sBackupLanConfig.aDhcpEndIpAdd) - 1] = '\0';  /* CID 379208 fix - String not null terminated */
     strncpy (sBackupLanConfig.aLeaseTime,sCurrentLanConfig.aLeaseTime, (sizeof(sBackupLanConfig.aLeaseTime)-1));
+    sBackupLanConfig.aLeaseTime[sizeof(sBackupLanConfig.aLeaseTime) - 1] = '\0';  /* CID 379208 fix - String not null terminated */
     sBackupLanConfig.bIpv6Enable = sCurrentLanConfig.bIpv6Enable;
     if (false == sCurrentLanConfig.bMwEnable)
     {

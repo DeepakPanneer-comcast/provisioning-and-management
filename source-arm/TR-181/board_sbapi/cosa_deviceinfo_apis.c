@@ -98,6 +98,7 @@
 #include "cosa_drg_common.h"
 #include "safec_lib_common.h"
 #include "ansc_string_util.h"
+#include "fw_download_check.h"
 
 #define DEVICE_PROPERTIES    "/etc/device.properties"
 #define PARTNERS_INFO_FILE              "/nvram/partners_defaults.json"
@@ -151,6 +152,10 @@ extern  ANSC_HANDLE             bus_handle;
 #include "platform_hal.h"
 #include "autoconf.h"     
 #include "secure_wrapper.h"
+
+#if defined(_ONESTACK_PRODUCT_REQ_)
+#include "devicemode.h"
+#endif
 
 #define _ERROR_ "NOT SUPPORTED"
 #define _START_TIME_12AM_ "0"
@@ -493,7 +498,7 @@ CosaDmlDiGetManufacturerOUI
 
 }
 
-#if !defined(_WNXL11BWL_PRODUCT_REQ_) && !defined(_SCER11BEL_PRODUCT_REQ_)
+#if !defined(_WNXL11BWL_PRODUCT_REQ_)
 ANSC_STATUS
 CosaDmlDiGetInActiveFirmware
     (
@@ -626,6 +631,14 @@ CosaDmlDiGetProductClass
 #elif defined(_SCXF11BFL_PRODUCT_REQ_)
     {
        rc = strcpy_s(pValue, *pulSize, "XF10");
+       if ( rc != EOK) {
+            ERR_CHK(rc);
+            return ANSC_STATUS_FAILURE;
+        }
+    }
+#elif defined(_XER2_PRODUCT_REQ_)
+    {
+       rc = strcpy_s(pValue, *pulSize, "XER2");
        if ( rc != EOK) {
             ERR_CHK(rc);
             return ANSC_STATUS_FAILURE;
@@ -1781,8 +1794,8 @@ void COSADmlGetProcessInfo(PCOSA_DATAMODEL_PROCSTATUS p_info)
 
     p_info->ProcessNumberOfEntries = i;
 
-    fprintf(stderr,"\n %s %d  ProcessNumberOfEntries:%lu",__func__,__LINE__,p_info->ProcessNumberOfEntries);
-    CcspTraceWarning(("\n %s %d  ProcessNumberOfEntries:%lu\n",__func__,__LINE__,p_info->ProcessNumberOfEntries));
+    fprintf(stderr," %s %d  ProcessNumberOfEntries:%lu\n",__func__,__LINE__,p_info->ProcessNumberOfEntries);
+    CcspTraceWarning((" %s %d  ProcessNumberOfEntries:%lu\n",__func__,__LINE__,p_info->ProcessNumberOfEntries));
 }
 
 void test_get_proc_info()
@@ -1821,12 +1834,8 @@ ULONG COSADmlGetCpuUsage()
     ULONG                       UsedTime = 0;
     ULONG                       IdleTime = 0;
     double                      CPUUsage = 0;
-    int                         CPUNum;
 
     AnscZeroMemory(time, sizeof(time));
-
-    CPUNum = sysconf(_SC_NPROCESSORS_ONLN);
-    CcspTraceWarning(("There are %d cpus!\n", CPUNum));
         
     if ( !(fp = fopen("/proc/stat", "r")) )
     {   
@@ -1870,7 +1879,7 @@ ULONG COSADmlGetCpuUsage()
          CcspTraceWarning(("To avoid division by zero error crash\n"));
     } 
     else {
-         CPUUsage = (UsedTime *100 / (UsedTime + IdleTime)) / CPUNum ;
+         CPUUsage = (UsedTime *100 / (UsedTime + IdleTime));
     }    
 
     if( !CPUUsage )
@@ -1957,8 +1966,8 @@ ULONG COSADmlGetProcessNumberOfEntries()
         dir = NULL;
     }
 
-    fprintf(stderr,"\n %s %d  ProcessNumberOfEntries:%lu", __func__, __LINE__, i);
-    CcspTraceWarning(("\n %s %d  ProcessNumberOfEntries:%lu\n", __func__, __LINE__, i));
+    fprintf(stderr," %s %d  ProcessNumberOfEntries:%lu\n", __func__, __LINE__, i);
+    CcspTraceWarning((" %s %d  ProcessNumberOfEntries:%lu\n", __func__, __LINE__, i));
     return i;
 }
 
@@ -2107,7 +2116,7 @@ CosaDmlDiGetProcessorSpeed
     memset(line, 0, sizeof(line));
 
 #if defined(_COSA_BCM_ARM_) || defined(_COSA_QCA_ARM_)
-#if defined (_SR300_PRODUCT_REQ_) || defined (_SCER11BEL_PRODUCT_REQ_) || defined (_SCXF11BFL_PRODUCT_REQ_)
+#if defined (_SR300_PRODUCT_REQ_) || defined (_SCER11BEL_PRODUCT_REQ_) || defined (_SCXF11BFL_PRODUCT_REQ_) || defined (_XER2_PRODUCT_REQ_)
     if(pValue && pulSize)
     {
         if( ANSC_STATUS_SUCCESS == platform_hal_GetCPUSpeed(pValue) )
@@ -2636,6 +2645,38 @@ CosaDmlDiSetSyndicationTR69CertLocation
 
     return ANSC_STATUS_SUCCESS;
 }
+
+#if defined(_ONESTACK_PRODUCT_REQ_)
+ANSC_STATUS
+CosaDmlDiGetSyndicationDeviceMode
+    (
+        ANSC_HANDLE                 hContext,
+        char*                       pValue,
+        size_t                      size
+    )
+{
+    UNREFERENCED_PARAMETER(hContext);
+    
+    if (!pValue || size < DEVICEMODE_BUF_SIZE)
+    {
+        CcspTraceError(("%s - Invalid buffer: pValue=%p, size=%zu (min required: %d)\n", 
+                        __FUNCTION__, pValue, size, DEVICEMODE_BUF_SIZE));
+        return ANSC_STATUS_FAILURE;
+    }
+    
+    // Call onestackutils API to get device mode from syscfg
+    if (onestackutils_get_syscfg_devicemode(pValue, size) != 0)
+    {
+        // If syscfg read fails, default to "residential"
+        snprintf(pValue, size, "residential");
+        CcspTraceWarning(("%s - Failed to get devicemode from syscfg, defaulting to 'residential'\n", __FUNCTION__));
+        return ANSC_STATUS_SUCCESS;
+    }
+    
+    CcspTraceInfo(("%s - Retrieved devicemode: '%s'\n", __FUNCTION__, pValue));
+    return ANSC_STATUS_SUCCESS;
+}
+#endif
 
 ANSC_STATUS getFactoryPartnerId
 	(
@@ -3446,11 +3487,11 @@ void FillPartnerIDValues(cJSON *json , char *partnerID , PCOSA_DATAMODEL_RDKB_UI
 						// For Sky, we need to pull the default login from the /tmp/serial.txt file.
 						FILE *fp = NULL;
 						char DefaultPassword[25] = {0};
-#if defined (_SCER11BEL_PRODUCT_REQ_) || defined (_SCXF11BFL_PRODUCT_REQ_)
+#if defined (_SCER11BEL_PRODUCT_REQ_) || defined (_SCXF11BFL_PRODUCT_REQ_) || defined(_XER2_PRODUCT_REQ_)
 						fp = popen("grep 'WIFI_PASSWORD' /tmp/serial.txt | cut -d '=' -f 2 | tr -d [:space:]", "r");
 #else
 						fp = popen("grep 'WIFIPASSWORD' /tmp/serial.txt | cut -d '=' -f 2 | tr -d [:space:]", "r");
-#endif /** _SCER11BEL_PRODUCT_REQ_ OR _SCXF11BFL_PRODUCT_REQ_ */
+#endif /** _SCER11BEL_PRODUCT_REQ_ OR _SCXF11BFL_PRODUCT_REQ_ OR _XER2_PRODUCT_REQ_ */
 						if (fp == NULL)
 						{
 							CcspTraceWarning(("%s - ERROR Grabbing the default password\n",__FUNCTION__));
@@ -4696,6 +4737,12 @@ FirmwareDownloadAndFactoryReset(void* arg)
         }
 
         CcspTraceWarning(("%s: ImageName %s, url %s\n", __FUNCTION__, Imagename, URL));
+        if(can_proceed_fw_download() == FW_DWNLD_MEMCHK_NOT_ENOUGH_MEM)
+        {
+            CcspTraceError(("FirmwareDownloadAndFactoryReset : Not enough memory to proceed firmware download\n"));
+            commonSyseventSet("fw_update_inprogress", "false");
+            return NULL;
+        }
         if( RETURN_ERR == cm_hal_FWupdateAndFactoryReset( URL, Imagename ))
         {
             CcspTraceError(("FirmwareDownloadAndFactoryReset :cm_hal_FWupdateAndFactoryReset failed for webpa.\n"));
@@ -5396,151 +5443,140 @@ BOOL CosaDmlGetInternetStatus()
   return TRUE;
 }
 
-#if defined(_COSA_FOR_BCI_)
+#if defined(_COSA_FOR_BCI_) || defined(_ONESTACK_PRODUCT_REQ_)
 #define XDNS_RESOLV_CONF "/etc/resolv.conf"
 #define XDNS_DNSMASQ_SERVERS_BAK "/nvram/dnsmasq_servers.bak"
 #define XDNS_DNSMASQ_SERVERS_CONF "/nvram/dnsmasq_servers.conf"
 
-
 int setMultiProfileXdnsConfig(BOOL bValue)
 {
+    char confEntry[256] = {0};
+    FILE *fp1 = NULL, *fp2 = NULL, *fp3 = NULL;
 
-        char confEntry[256] = {0};
+    fp1 = fopen(XDNS_RESOLV_CONF, "r");
+    if(fp1 == NULL)
+    {
+        fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_RESOLV_CONF, 'r') Error !!\n");
+        return 0;
+    }
 
-  
-        FILE *fp1 = NULL, *fp2 = NULL, *fp3 = NULL;
+    fp2 = fopen(XDNS_DNSMASQ_SERVERS_CONF ,"r");
+    if(fp2 == NULL)
+    {
+        fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_DNSMASQ_SERVERS_CONF, 'r') Error !!\n");
+        fclose(fp1);
+        fp1 = NULL;
+        return 0;
+    }
 
-        fp1 = fopen(XDNS_RESOLV_CONF, "r");
-        if(fp1 == NULL)
+    unlink(XDNS_DNSMASQ_SERVERS_BAK);
+
+    fp3 = fopen(XDNS_DNSMASQ_SERVERS_BAK ,"a");
+    if(fp3 == NULL)
+    {
+        fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_DNSMASQ_SERVERS_BAK, 'a') Error !!\n");
+        fclose(fp2);
+        fp2 = NULL;
+        fclose(fp1);
+        fp1 = NULL;
+        return 0;
+    }
+
+    //Get all entries (other than XDNS_Multi_Profile) from resolv.conf file//
+    while(fgets(confEntry, sizeof(confEntry), fp1) != NULL)
+    {
+        if ( strstr(confEntry, "XDNS_Multi_Profile"))
         {
-                fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_RESOLV_CONF, 'r') Error !!\n");
-                return 0;
+            continue;
         }
+        fprintf(fp3, "%s", confEntry);
+    }
 
-        fp2 = fopen(XDNS_DNSMASQ_SERVERS_CONF ,"r");
-        if(fp2 == NULL)
-        {
-                fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_DNSMASQ_SERVERS_CONF, 'r') Error !!\n");
-                fclose(fp1);
-                fp1 = NULL;
-                return 0;
-        }
+    if(bValue)
+    {
+        fprintf(fp3, "XDNS_Multi_Profile Enabled\n");
+        CcspTraceWarning(("%s XDNS_Multi_Profile Feature Enabled\n", __FUNCTION__));
+    }
+    else
+    {
+        fprintf(fp3, "XDNS_Multi_Profile Disabled\n");
+        CcspTraceWarning(("%s XDNS_Multi_Profile Feature Disabled\n", __FUNCTION__));
+    }
 
-        unlink(XDNS_DNSMASQ_SERVERS_BAK);
-
-        fp3 = fopen(XDNS_DNSMASQ_SERVERS_BAK ,"a");
-        if(fp3 == NULL)
-        {
-                fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_DNSMASQ_SERVERS_BAK, 'a') Error !!\n");
-                fclose(fp2);
-                fp2 = NULL;
-                fclose(fp1);
-                fp1 = NULL;
-                return 0;
-        }
-
-
-        //Get all entries (other than XDNS_Multi_Profile) from resolv.conf file//
-        while(fgets(confEntry, sizeof(confEntry), fp1) != NULL)
-        {
-                if ( strstr(confEntry, "XDNS_Multi_Profile"))
-                {
-                        continue;
-                }
-
-                fprintf(fp3, "%s", confEntry);
-        }
-
-        if(bValue)
-        {
-                fprintf(fp3, "XDNS_Multi_Profile Enabled\n");
-                CcspTraceWarning(("%s XDNS_Multi_Profile Feature Enabled\n", __FUNCTION__));
-        }
-        else
-        {
-                fprintf(fp3, "XDNS_Multi_Profile Disabled\n");
-                CcspTraceWarning(("%s XDNS_Multi_Profile Feature Disabled\n", __FUNCTION__));
-        }
-
-        fclose(fp3); 
+    fclose(fp3);
   	fp3 = NULL;
-        fclose(fp2); 
+    fclose(fp2);
   	fp2 = NULL;
-        fclose(fp1); 
+    fclose(fp1);
   	fp1 = NULL;
 
-        fp1 = fopen(XDNS_RESOLV_CONF, "w");
-        if(fp1 == NULL)
-        {
-                fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_RESOLV_CONF, 'w') Error !!\n");
-                return 0;
-        }
+    fp1 = fopen(XDNS_RESOLV_CONF, "w");
+    if(fp1 == NULL)
+    {
+        fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_RESOLV_CONF, 'w') Error !!\n");
+        return 0;
+    }
 
-        fp2 = fopen(XDNS_DNSMASQ_SERVERS_CONF,"w");
-        if(fp2 == NULL)
-        {
-                fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_DNSMASQ_SERVERS_CONF, 'w') Error !!\n");
-                if(fp1)
-                {
-                    fclose(fp1);
-                    fp1 = NULL;
-                }
-
-                return 0;
-        }
-
-        fp3 = fopen(XDNS_DNSMASQ_SERVERS_BAK ,"r");
-        if(fp3 == NULL)
-        {
-                fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_DNSMASQ_SERVERS_BAK, 'r') Error !!\n");
-                fclose(fp2); 
-          	fp2 = NULL;
-                if(fp1) 
-                {
-                    fclose(fp1);
-                    fp1 = NULL;
-                }
-                return 0;
-        }
-
-        while(fgets(confEntry, sizeof(confEntry), fp3) != NULL)
-        {
-                //copy back entries to resolv.conf if default entry is found. else keep the old resolv.
-                if(fp1)
-                {
-                        fprintf(fp1, "%s", confEntry);
-                }
-
-                //copy only dnsoverride entries into nvram
-                if (strstr(confEntry, "dnsoverride"))
-                {
-
-                        fprintf(fp2, "%s", confEntry);
-                }
-        }
-
-        if(fp3)
-        {
-            fclose(fp3);
-            fp3 = NULL;
-        }
-        if(fp2)
-        {
-            fclose(fp2);
-            fp2 = NULL;
-        }
+    fp2 = fopen(XDNS_DNSMASQ_SERVERS_CONF,"w");
+    if(fp2 == NULL)
+    {
+        fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_DNSMASQ_SERVERS_CONF, 'w') Error !!\n");
         if(fp1)
         {
             fclose(fp1);
             fp1 = NULL;
         }
+        return 0;
+    }
 
-        return 1; //success
+    fp3 = fopen(XDNS_DNSMASQ_SERVERS_BAK ,"r");
+    if(fp3 == NULL)
+    {
+        fprintf(stderr,"### XDNS : setMultiProfileXdnsConfig() - fopen(XDNS_DNSMASQ_SERVERS_BAK, 'r') Error !!\n");
+        fclose(fp2);
+        fp2 = NULL;
+        if(fp1)
+        {
+            fclose(fp1);
+            fp1 = NULL;
+        }
+        return 0;
+    }
 
+    while(fgets(confEntry, sizeof(confEntry), fp3) != NULL)
+    {
+        //copy back entries to resolv.conf if default entry is found. else keep the old resolv.
+        if(fp1)
+        {
+            fprintf(fp1, "%s", confEntry);
+        }
 
+        //copy only dnsoverride entries into nvram
+        if (strstr(confEntry, "dnsoverride"))
+        {
+            fprintf(fp2, "%s", confEntry);
+        }
+    }
+
+    if(fp3)
+    {
+        fclose(fp3);
+        fp3 = NULL;
+    }
+    if(fp2)
+    {
+        fclose(fp2);
+        fp2 = NULL;
+    }
+    if(fp1)
+    {
+        fclose(fp1);
+        fp1 = NULL;
+    }
+    return 1; //success
 }
 
-#endif
+#endif // _COSA_FOR_BCI_ || _ONESTACK_PRODUCT_REQ_
 
 #if defined (FEATURE_SUPPORT_RADIUSGREYLIST)
 BOOL
@@ -5765,3 +5801,5 @@ BOOL CosaDmlSetDFSatBootUp(BOOL bValue)
     CcspTraceError(("%s - %d - WiFi Component notification Failed\n", __FUNCTION__, __LINE__));
     return FALSE;
 }
+
+

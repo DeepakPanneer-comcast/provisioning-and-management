@@ -72,7 +72,12 @@
 #include "safec_lib_common.h"
 #include "syscfg/syscfg.h"
 #include <arpa/inet.h>
+#include "cosa_apis_util.h"
 
+#ifdef _ONESTACK_PRODUCT_REQ_
+#include <rdkb_feature_mode_gate.h>
+#include "devicemode.h"
+#endif
 static int ifWanRestart = 0;
 
 /***********************************************************************
@@ -220,8 +225,13 @@ X_CISCO_COM_DeviceControl_GetParamBoolValue
 
     if (strcmp(ParamName, "IGMPProxyEnable") == 0)
     {
-        if (CosaDmlDcGetIGMPProxyEnable(NULL, pBool) != ANSC_STATUS_SUCCESS)
-            return FALSE;
+#ifndef DISABLE_IGMPPROXY
+         if (CosaDmlDcGetIGMPProxyEnable(NULL, pBool) != ANSC_STATUS_SUCCESS)
+             return FALSE;
+#else
+       CcspTraceWarning(("rdkb igmpproxy service is disabled\n"));
+       *pBool = FALSE;
+#endif
         return TRUE;
     }
 
@@ -895,10 +905,14 @@ X_CISCO_COM_DeviceControl_SetParamBoolValue
 
     if (strcmp(ParamName, "IGMPProxyEnable") == 0)
     {
+#ifndef DISABLE_IGMPPROXY
         retStatus = CosaDmlDcSetIGMPProxyEnable(NULL, bValue);
         if (retStatus != ANSC_STATUS_SUCCESS)
             return FALSE;
 
+#else
+        CcspTraceWarning(("rdkb igmpproxy service is disabled\n"));
+#endif
         return TRUE;
     }
 
@@ -946,6 +960,10 @@ X_CISCO_COM_DeviceControl_SetParamBoolValue
 
     if (strcmp(ParamName, "EnableStaticNameServer") == 0)
     {
+#if defined(_ONESTACK_PRODUCT_REQ_)
+        if (CheckTSIPModeGate(bValue) != ANSC_STATUS_SUCCESS)
+            return FALSE;
+#endif
         pMyObject->EnableStaticNameServer = bValue;
 
         retStatus = CosaDmlDcSetEnableStaticNameServer(NULL, pMyObject->EnableStaticNameServer);
@@ -1241,6 +1259,10 @@ X_CISCO_COM_DeviceControl_SetParamUlongValue
 
     if (strcmp(ParamName, "NameServer1") == 0)
     {
+#if defined(_ONESTACK_PRODUCT_REQ_)
+        if (CheckTSIPModeGate(TRUE) != ANSC_STATUS_SUCCESS)
+            return FALSE;
+#endif
         pMyObject->NameServer1.Value = uValue;
 
         retStatus = CosaDmlDcSetWanNameServer(NULL, pMyObject->NameServer1.Value, 1);
@@ -1252,6 +1274,10 @@ X_CISCO_COM_DeviceControl_SetParamUlongValue
 
     if (strcmp(ParamName, "NameServer2") == 0)
     {
+#if defined(_ONESTACK_PRODUCT_REQ_)
+        if (CheckTSIPModeGate(TRUE) != ANSC_STATUS_SUCCESS)
+            return FALSE;
+#endif
         pMyObject->NameServer2.Value = uValue;
 
         retStatus = CosaDmlDcSetWanNameServer(NULL, pMyObject->NameServer2.Value, 2);
@@ -2124,9 +2150,6 @@ LanMngm_SetParamUlongValue
     BOOL                                      bridgeMode;
     ULONG                                     deviceMode;
 
-    char ip_buff[16]  = {0};
-    struct in_addr addr;
-
     if (CosaDmlDcGetDeviceMode(NULL, &deviceMode) != ANSC_STATUS_SUCCESS)
             return FALSE;
     
@@ -2166,6 +2189,22 @@ LanMngm_SetParamUlongValue
             CcspTraceWarning(("BRIDGE_ERROR:Fail to enable Bridge mode when Mesh is on\n"));
             return FALSE;
         }*/
+#ifdef _ONESTACK_PRODUCT_REQ_
+        if (COSA_DML_LanMode_FullBridgeStatic == uValuepUlong)
+        {
+            if (true == isFeatureSupportedInCurrentMode(FEATURE_BASIC_BRIDGE_MODE))
+            {
+                t2_event_d("BasicBridgeMode_Supported", 1);
+                CcspTraceInfo(("Basic BridgeMode Supported\n"));
+            }
+            else
+            {
+                t2_event_d("BasicBridgeMode_NotSupported", 1);
+                CcspTraceError(("Basic BridgeMode Not Supported\n"));
+                return FALSE;
+            }
+        }
+#endif
 
         pLanMngm->LanMode = uValuepUlong;
         CcspTraceWarning(("RDKB_LAN_CONFIG_CHANGED: Setting new LanMode value (bridge-dhcp(1),bridge-static(2),router(3),full-bridge-static(4)) as (%lu)...\n",
@@ -2189,11 +2228,6 @@ LanMngm_SetParamUlongValue
     }
     if (strcmp(ParamName, "LanSubnetMask") == 0)
     {
-        addr.s_addr = uValuepUlong;
-        if (inet_ntop(AF_INET, &addr, ip_buff, sizeof(ip_buff)) == NULL) {
-            CcspTraceWarning(("inet_ntop: Invalid IPv4 address\n"));
-            return FALSE;
-        }
         if (Dhcpv4_Lan_MutexTryLock() != 0)
         {
             CcspTraceWarning(("%s not supported if already lan blob update is inprogress\n",ParamName));
@@ -2201,7 +2235,6 @@ LanMngm_SetParamUlongValue
         }
 
 		CcspTraceWarning(("RDKB_LAN_CONFIG_CHANGED: Setting new LanSubnetMask value  ...\n"));
-        syscfg_set_commit(NULL, DHCPV4_LAN_NETMASK, ip_buff);
         pLanMngm->LanSubnetMask.Value = uValuepUlong;
         lan_ip_config_modified=true;
         Dhcpv4_Lan_MutexUnLock();
@@ -2209,11 +2242,6 @@ LanMngm_SetParamUlongValue
     }
     if (strcmp(ParamName, "LanIPAddress") == 0)
     {
-        addr.s_addr = uValuepUlong;
-        if (inet_ntop(AF_INET, &addr, ip_buff, sizeof(ip_buff)) == NULL) {
-            CcspTraceWarning(("inet_ntop: Invalid IPv4 address\n"));
-            return FALSE;
-        }
         if (Dhcpv4_Lan_MutexTryLock() != 0)
         {
             CcspTraceWarning(("%s not supported if already lan blob update is inprogress\n",ParamName));
@@ -2221,7 +2249,6 @@ LanMngm_SetParamUlongValue
         }
 
 		CcspTraceWarning(("RDKB_LAN_CONFIG_CHANGED: Setting new LanIPAddress value  ...\n"));
-        syscfg_set_commit(NULL, DHCPV4_LAN_IP, ip_buff);
         pLanMngm->LanIPAddress.Value = uValuepUlong;
         lan_ip_config_modified=true;
         Dhcpv4_Lan_MutexUnLock();
@@ -2274,7 +2301,22 @@ LanMngm_Validate
     lanSubnetMask = htonl(pLanMngm->LanSubnetMask.Value);
 
     /* Convert to network byte order and check subnetmask */
-#if defined(_BCI_FEATURE_REQ)
+#if defined(_BCI_FEATURE_REQ) || defined(_ONESTACK_PRODUCT_REQ_)
+#if defined(_ONESTACK_PRODUCT_REQ_)
+    /* XB10-2798: residential mode - restrict to 5 standard masks */
+    const bool isBusiness = is_devicemode_business();
+
+    if(!isBusiness &&
+       (lanSubnetMask != 0xFFFFFF00 && lanSubnetMask != 0xFFFF0000 &&
+        lanSubnetMask != 0xFF000000 && lanSubnetMask != 0xFFFFFF80 &&
+        lanSubnetMask != 0xFFFFFFFC))
+    {
+        CcspTraceWarning(("RDKB_LAN_CONFIG_CHANGED: Modified LanSubnetMask doesn't meet the conditions,reverting back to old value  ...\n"));
+        goto RET_ERR;
+    }
+    /* business mode - reuse the BCI full-range check below */
+    if(isBusiness)
+#endif
      if(lanSubnetMask != 0xFF000000 &&  //8
        lanSubnetMask != 0xFF800000 &&  //9
        lanSubnetMask != 0xFFC00000 &&  //10
@@ -2314,6 +2356,7 @@ LanMngm_Validate
         CcspTraceWarning(("RDKB_LAN_CONFIG_CHANGED: Modified LanSubnetMask doesn't meet the conditions,reverting back to old value  ...\n"));
         goto RET_ERR;
     }
+
 #if defined (WIFI_MANAGE_SUPPORTED)
     uiLanIpInHex = ntohl (pLanMngm->LanIPAddress.Value);
     CcspTraceWarning(("%s:%d- Lan Ip in hex : %08X\n", __FUNCTION__,__LINE__, uiLanIpInHex));
